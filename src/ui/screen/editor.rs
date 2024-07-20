@@ -22,7 +22,7 @@ use super::AppScreen;
 use crate::objects::prelude::*;
 use crate::physics::prelude::*;
 
-const PREDICTIONS_NUMBER: usize = 120;
+pub const PREDICTIONS_NUMBER: usize = 120;
 
 pub fn plugin(app: &mut App) {
     app.add_computed_state::<InEditor>()

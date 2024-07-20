@@ -9,7 +9,7 @@ pub const TPS: f32 = 1.;
 pub const STPS: f64 = 64.;
 
 /// Game time that is added at each client update (in days, multiplied by simstepsize)
-pub const GAMETIME_PER_SIMTICK: f64 = 1e-2;
+pub const GAMETIME_PER_SIMTICK: f64 = 1e-3;
 
 pub fn plugin(app: &mut App) {
     app.insert_resource(Time::<Fixed>::from_hz(STPS))

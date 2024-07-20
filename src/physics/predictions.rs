@@ -8,7 +8,7 @@ use super::{
 };
 
 /// Number of client updates between two predictions
-const PREDICTIONS_STEP: usize = 3;
+const PREDICTIONS_STEP: usize = 20;
 
 /// A component representing identifying a prediction of a ship at a selected time
 #[derive(Component)]

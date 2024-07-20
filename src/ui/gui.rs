@@ -1,6 +1,6 @@
 use bevy::{
     a11y::AccessibilityPlugin,
-    color::palettes::css::{BLACK, DARK_GRAY, GOLD, PURPLE, TEAL},
+    color::palettes::css::{BLACK, DARK_GRAY, GOLD, TEAL},
     core_pipeline::CorePipelinePlugin,
     gizmos::GizmoPlugin,
     input::{
@@ -25,6 +25,7 @@ use crate::{
 };
 
 use super::{
+    screen::editor::PREDICTIONS_NUMBER,
     widget::space_map::{SpaceMap, ZOOM_STEP},
     RenderSet, UiUpdate,
 };
@@ -82,7 +83,8 @@ impl Plugin for GuiPlugin {
         )
         .add_systems(
             PreUpdate,
-            send_select_object_event.run_if(on_event::<MouseButtonInput>()),
+            send_select_object_event
+                .run_if(on_event::<MouseButtonInput>().and_then(resource_exists::<SpaceMap>)),
         );
     }
 }
@@ -238,46 +240,51 @@ fn update_transform(system_size: Res<SystemSize>, mut query: Query<(&mut Transfo
 fn draw_gizmos(
     space_map: Res<SpaceMap>,
     mut gizmos: Gizmos,
-    bodies: Query<(&Transform, &BodyInfo, &HillRadius)>,
-    ships: Query<&Transform, With<ShipInfo>>,
-    predictions: Query<&Transform, With<Prediction>>,
+    bodies: Query<(&Transform, &Velocity, &BodyInfo, &HillRadius)>,
+    ships: Query<(&Transform, &Velocity, &Influenced), With<ShipInfo>>,
+    predictions: Query<(&Transform, &Prediction)>,
 ) {
     let scale = MAX_WIDTH as f64 / space_map.system_size;
-    if let SpaceMap {
+    if let &SpaceMap {
         zoom_level,
         selected: Some(s),
         ..
     } = space_map.as_ref()
     {
-        if let Ok((pos, info, ..)) = bodies.get(*s) {
+        if let Ok((pos, _, info, _)) = bodies.get(s) {
             gizmos.circle_2d(
                 pos.translation.xy(),
                 (10. / zoom_level).max(info.0.radius * scale + 15. / zoom_level) as f32,
                 Color::srgba(1., 1., 1., 0.1),
             );
         }
-        for (pos, _, radius) in bodies.iter() {
+        for (pos, _, _, radius) in bodies.iter() {
             gizmos.circle_2d(
                 pos.translation.xy(),
                 (radius.0 * scale) as f32,
                 Color::srgba(1., 0.1, 0.1, 0.1),
             );
         }
-        for e in ships.iter() {
-            gizmos.rect_2d(
-                e.translation.xy(),
-                0.,
-                (10. / zoom_level) as f32 * Vec2::ONE,
-                Color::Srgba(PURPLE),
-            )
+        for (t, speed, influence) in ships.iter() {
+            let ref_speed = influence
+                .main_influencer
+                .map_or(DVec3::ZERO, |e| bodies.get(e).unwrap().1 .0);
+            let speed = ((speed.0 - ref_speed).normalize_or(DVec3::X) * 30. / zoom_level)
+                .xy()
+                .as_vec2();
+            let t = t.translation.xy() - speed / 3.;
+            let perp = speed.perp() / 3.;
+            gizmos.linestrip_2d(
+                [t + speed, t + perp, t - perp, t + speed],
+                Color::Srgba(GOLD),
+            );
         }
-        for e in predictions.iter() {
-            gizmos.rect_2d(
-                e.translation.xy(),
-                0.,
-                (10. / zoom_level) as f32 * Vec2::ONE,
+        for (t, p) in predictions.iter() {
+            gizmos.circle_2d(
+                t.translation.xy(),
+                (1. - p.index as f32 / PREDICTIONS_NUMBER as f32) * 2. / zoom_level as f32,
                 Color::srgba(1., 1., 1., 0.1),
-            )
+            );
         }
     }
 }
