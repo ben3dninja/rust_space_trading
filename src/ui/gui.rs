@@ -5,8 +5,8 @@ use bevy::{
     gizmos::GizmoPlugin,
     input::{
         common_conditions::input_pressed,
-        mouse::{MouseMotion, MouseScrollUnit, MouseWheel},
-        InputPlugin,
+        mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
+        ButtonState, InputPlugin,
     },
     math::{DVec2, DVec3},
     prelude::*,
@@ -14,6 +14,7 @@ use bevy::{
     sprite::{MaterialMesh2dBundle, Mesh2dHandle, SpritePlugin},
     text::TextPlugin,
     ui::UiPlugin,
+    window::PrimaryWindow,
     winit::{WakeUp, WinitPlugin},
 };
 
@@ -52,6 +53,7 @@ impl Plugin for GuiPlugin {
             GizmoPlugin,
         ))
         .insert_resource(ClearColor(Color::Srgba(BLACK)))
+        .add_event::<SelectObjectEvent>()
         .add_systems(Startup, gui_setup)
         .add_systems(
             OnEnter(Loaded),
@@ -77,12 +79,34 @@ impl Plugin for GuiPlugin {
                 pan_when_dragging.run_if(input_pressed(MouseButton::Left)),
             )
                 .run_if(resource_exists::<SpaceMap>),
+        )
+        .add_systems(
+            PreUpdate,
+            send_select_object_event.run_if(on_event::<MouseButtonInput>()),
         );
     }
 }
 
 #[derive(SystemSet, Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct GUIUpdate;
+
+#[derive(Event)]
+pub struct SelectObjectEvent {
+    pub entity: Entity,
+}
+
+#[derive(Component, Copy, Clone, Debug)]
+pub struct SelectionRadius {
+    min_radius: f32,
+    actual_radius: f32,
+}
+
+#[derive(Resource)]
+pub struct Colors {
+    stars: Handle<ColorMaterial>,
+    planets: Handle<ColorMaterial>,
+    other: Handle<ColorMaterial>,
+}
 
 fn gui_setup(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>>) {
     let mut cam = Camera2dBundle::default();
@@ -94,13 +118,6 @@ fn gui_setup(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>
         other: materials.add(Color::Srgba(DARK_GRAY)),
     };
     commands.insert_resource(colors);
-}
-
-#[derive(Resource)]
-pub struct Colors {
-    stars: Handle<ColorMaterial>,
-    planets: Handle<ColorMaterial>,
-    other: Handle<ColorMaterial>,
 }
 
 fn insert_display_components(
@@ -118,14 +135,20 @@ fn insert_display_components(
             BodyType::Planet => (colors.planets.clone(), -1.),
             _ => (colors.other.clone(), -2.),
         };
-        commands.entity(e).insert(MaterialMesh2dBundle {
-            mesh: Mesh2dHandle(meshes.add(Circle {
-                radius: MIN_RADIUS.max((data.radius * scale) as f32),
-            })),
-            material,
-            transform: Transform::from_xyz(0., 0., z),
-            ..default()
-        });
+        commands.entity(e).insert((
+            MaterialMesh2dBundle {
+                mesh: Mesh2dHandle(meshes.add(Circle {
+                    radius: MIN_RADIUS.max((data.radius * scale) as f32),
+                })),
+                material,
+                transform: Transform::from_xyz(0., 0., z),
+                ..default()
+            },
+            SelectionRadius {
+                min_radius: 10.,
+                actual_radius: (data.radius * scale) as f32,
+            },
+        ));
     });
     for e in ships.iter() {
         commands
@@ -150,6 +173,37 @@ fn pan_when_dragging(mut motions: EventReader<MouseMotion>, mut map: ResMut<Spac
         let scale = map.system_size / (500. * map.zoom_level);
         // The horizontal inputs seem to be inversed
         map.offset_amount += scale * event.delta.as_dvec2() * DVec2::new(-1., 1.);
+    }
+}
+
+fn send_select_object_event(
+    mut clicks: EventReader<MouseButtonInput>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    cam: Query<(&Camera, &GlobalTransform)>,
+    mut writer: EventWriter<SelectObjectEvent>,
+    objects: Query<(Entity, &Transform, &SelectionRadius)>,
+    map: Res<SpaceMap>,
+) {
+    let (cam, cam_transform) = cam.single();
+    for event in clicks.read() {
+        if matches!(
+            (event.state, event.button),
+            (ButtonState::Pressed, MouseButton::Left)
+        ) {
+            if let Some(cursor_pos) = window.single().cursor_position() {
+                if let Some(translation) = cam.viewport_to_world_2d(cam_transform, cursor_pos) {
+                    objects
+                        .iter()
+                        .find(|(_, pos, rad)| {
+                            (pos.translation.xy() - translation).length()
+                                < rad
+                                    .actual_radius
+                                    .max(rad.min_radius / map.zoom_level as f32)
+                        })
+                        .map(|(entity, _, _)| writer.send(SelectObjectEvent { entity }));
+                }
+            }
+        }
     }
 }
 
@@ -195,12 +249,13 @@ fn draw_gizmos(
         ..
     } = space_map.as_ref()
     {
-        let (pos, info, ..) = bodies.get(*s).unwrap();
-        gizmos.circle_2d(
-            pos.translation.xy(),
-            (10. / zoom_level).max(info.0.radius * scale + 15. / zoom_level) as f32,
-            Color::srgba(1., 1., 1., 0.1),
-        );
+        if let Ok((pos, info, ..)) = bodies.get(*s) {
+            gizmos.circle_2d(
+                pos.translation.xy(),
+                (10. / zoom_level).max(info.0.radius * scale + 15. / zoom_level) as f32,
+                Color::srgba(1., 1., 1., 0.1),
+            );
+        }
         for (pos, _, radius) in bodies.iter() {
             gizmos.circle_2d(
                 pos.translation.xy(),

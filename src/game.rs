@@ -16,6 +16,7 @@ use crate::{
     },
     physics::{
         influence::InfluenceUpdate, orbit::OrbitsUpdate, prelude::ToggleTime, PhysicsPlugin,
+        PhysicsUpdate,
     },
     ui::gui::GUIUpdate,
 };
@@ -67,6 +68,7 @@ impl Plugin for GamePlugin {
             (ObjectsUpdate, OrbitsUpdate, InfluenceUpdate, GUIUpdate).chain(),
         )
         .configure_sets(Update, ObjectsUpdate.run_if(in_state(Loaded)))
+        .configure_sets(FixedUpdate, PhysicsUpdate.run_if(in_state(Loaded)))
         .add_systems(OnExit(Loaded), clear_loaded)
         .add_systems(OnEnter(GameStage::Action), enable_time)
         .add_systems(OnEnter(GameStage::Preparation), disable_time);

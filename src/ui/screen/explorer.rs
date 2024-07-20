@@ -11,6 +11,7 @@ use crate::{
     game::GameStage,
     physics::{orbit::SystemSize, time::TimeEvent},
     ui::{
+        gui::SelectObjectEvent,
         widget::{
             info::InfoWidget,
             search::{SearchPlugin, SearchState, SearchWidget},
@@ -43,7 +44,7 @@ pub fn plugin(app: &mut App) {
             Update,
             (
                 read_input.in_set(InputReading),
-                handle_explorer_events.in_set(EventHandling),
+                (handle_explorer_events, focus_on_select_body).in_set(EventHandling),
                 update_space_map.in_set(UiUpdate),
             )
                 .run_if(in_loaded_screen::<ExplorerContext>(AppScreen::Explorer)),
@@ -118,6 +119,19 @@ pub(crate) enum ExplorerEvent {
     SpaceMap(SpaceMapEvent),
     View(ViewEvent),
     Time(TimeEvent),
+}
+
+impl ExplorerContext {
+    pub fn selected_body(&self) -> BodyID {
+        let tree_selection = self.tree_state.selected_body_id();
+        match self.side_pane_mode {
+            SidePaneMode::Tree => tree_selection,
+            SidePaneMode::Search => self
+                .search_state
+                .selected_body_id()
+                .unwrap_or(tree_selection),
+        }
+    }
 }
 
 #[derive(Debug, Event)]
@@ -222,7 +236,6 @@ fn handle_explorer_events(
                     Select(d) => {
                         ctx.tree_state.select_adjacent(*d);
                         ctx.update_info(&mapping.0, &bodies);
-                        space_map.selected = Some(mapping.0[&ctx.tree_state.selected_body_id()]);
                     }
                     ToggleTreeExpansion => ctx.tree_state.toggle_selection_expansion(),
                 }
@@ -239,8 +252,6 @@ fn handle_explorer_events(
                     ValidateSearch => {
                         if let Some(id) = ctx.search_state.selected_body_id() {
                             ctx.tree_state.select_body(id);
-                            space_map.selected =
-                                Some(mapping.0[&ctx.tree_state.selected_body_id()]);
                             ctx.update_info(&mapping.0, &bodies);
                         }
                         ctx.side_pane_mode = SidePaneMode::Tree;
@@ -260,8 +271,8 @@ fn handle_explorer_events(
                     MapOffsetReset => space_map.reset_offset(),
                     FocusBody => {
                         if let Some(entity) = mapping.0.get(&ctx.tree_state.selected_body_id()) {
-                            space_map.focus_body = Some(*entity);
-                            ctx.tree_state.focus_body = Some(bodies.get(*entity).unwrap().0.id)
+                            space_map.focus(*entity);
+                            ctx.tree_state.focus_body(bodies.get(*entity).unwrap().0.id)
                         }
                     }
                     Autoscale => space_map.autoscale(&mapping.0, &bodies),
@@ -305,12 +316,27 @@ fn handle_explorer_events(
 
 fn update_space_map(
     mut ctx: ResMut<ExplorerContext>,
-    space_map: Res<SpaceMap>,
+    mut space_map: ResMut<SpaceMap>,
     query: Query<(Entity, &Position, &BodyInfo)>,
+    mapping: Res<BodiesMapping>,
 ) {
+    space_map.selected = mapping.0.get(&ctx.selected_body()).cloned();
     ctx.space_map.update_map(space_map.as_ref(), &query);
 }
 
+fn focus_on_select_body(
+    mut events: EventReader<SelectObjectEvent>,
+    info: Query<&BodyInfo>,
+    mut space_map: ResMut<SpaceMap>,
+    mut ctx: ResMut<ExplorerContext>,
+) {
+    for event in events.read() {
+        if let Ok(info) = info.get(event.entity) {
+            space_map.focus(event.entity);
+            ctx.tree_state.focus_body(info.0.id)
+        }
+    }
+}
 pub struct ExplorerScreen<'a> {
     pub map: &'a mut SpaceMap,
 }

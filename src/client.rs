@@ -10,7 +10,7 @@ use crate::{
     game::GamePlugin,
     network::{ClientChannel, ServerMessage},
     objects::prelude::BodiesConfig,
-    prelude::GameTime,
+    prelude::{GameTime, ToggleTime},
     utils::ecs::exit_on_error_if_app,
 };
 
@@ -69,6 +69,17 @@ impl Plugin for ClientPlugin {
         .add_systems(
             OnEnter(ClientMode::Multiplayer),
             start_connection.pipe(exit_on_error_if_app),
+        )
+        .add_systems(
+            OnEnter(ClientMode::Explorer),
+            move |mut toggle: ResMut<ToggleTime>, mut time: ResMut<GameTime>| {
+                toggle.0 = true;
+                time.simtick = 0;
+            },
+        )
+        .add_systems(
+            OnEnter(ClientMode::None),
+            move |mut toggle: ResMut<ToggleTime>| toggle.0 = false,
         )
         .add_systems(
             Update,

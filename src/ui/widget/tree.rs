@@ -29,7 +29,7 @@ pub struct TreeState {
     /// Indices of the entries in the system tree, and whether they are expanded or not
     visible_tree_entries: Vec<usize>,
     system_tree: Vec<TreeEntry>,
-    pub focus_body: Option<BodyID>,
+    focus_body: Option<BodyID>,
     list_state: ListState,
 }
 
@@ -204,23 +204,23 @@ impl TreeState {
 
     pub fn toggle_selection_expansion(&mut self) {
         if let Some(index) = self.list_state.selected() {
-            self.toggle_entry_expansion(index);
+            self.toggle_visible_entry_expansion(index);
         }
     }
 
-    pub fn expand_entry_by_id(&mut self, id: BodyID) {
+    pub fn expand_visible_entry_by_id(&mut self, id: BodyID) {
         if let Some(i) = self.index_of(id) {
-            self.try_expand_entry(i);
+            self.try_expand_visible_entry(i);
         }
     }
 
-    fn toggle_entry_expansion(&mut self, index: usize) {
-        if index < self.visible_tree_entries.len() && !self.try_collapse_entry(index) {
-            self.try_expand_entry(index);
+    fn toggle_visible_entry_expansion(&mut self, index: usize) {
+        if index < self.visible_tree_entries.len() && !self.try_collapse_visible_entry(index) {
+            self.try_expand_visible_entry(index);
         }
     }
 
-    pub fn try_expand_entry(&mut self, index: usize) -> bool {
+    pub fn try_expand_visible_entry(&mut self, index: usize) -> bool {
         let index_in_tree = self.visible_tree_entries[index];
         if self.system_tree[index_in_tree].is_expanded {
             return false;
@@ -247,7 +247,7 @@ impl TreeState {
         true
     }
 
-    pub fn try_collapse_entry(&mut self, index: usize) -> bool {
+    pub fn try_collapse_visible_entry(&mut self, index: usize) -> bool {
         let index_in_tree = self.visible_tree_entries[index];
         if !self.system_tree[index_in_tree].is_expanded {
             return false;
@@ -275,24 +275,28 @@ impl TreeState {
             .id
     }
 
-    pub fn select_body(&mut self, id: BodyID) -> bool {
+    pub fn try_expand_entry(&mut self, index: usize) {
         let mut ancestors = Vec::new();
+        let mut current = &self.system_tree[index];
+        while let Some(parent_index_in_tree) = current.index_of_parent {
+            ancestors.push(parent_index_in_tree);
+            current = &self.system_tree[parent_index_in_tree];
+        }
+        ancestors.reverse();
+        for index_in_tree in ancestors {
+            if let Some(index) = self
+                .visible_tree_entries
+                .iter()
+                .position(|&i| i == index_in_tree)
+            {
+                self.try_expand_visible_entry(index);
+            }
+        }
+    }
+
+    pub fn select_body(&mut self, id: BodyID) -> bool {
         if let Some(index) = self.index_of(id) {
-            let mut current = &self.system_tree[index];
-            while let Some(parent_index_in_tree) = current.index_of_parent {
-                ancestors.push(parent_index_in_tree);
-                current = &self.system_tree[parent_index_in_tree];
-            }
-            ancestors.reverse();
-            for index_in_tree in ancestors {
-                if let Some(index) = self
-                    .visible_tree_entries
-                    .iter()
-                    .position(|&i| i == index_in_tree)
-                {
-                    self.try_expand_entry(index);
-                }
-            }
+            self.try_expand_entry(index);
             if let Some(index) = self
                 .visible_tree_entries
                 .iter()
@@ -303,6 +307,13 @@ impl TreeState {
             }
         }
         false
+    }
+
+    pub fn focus_body(&mut self, id: BodyID) {
+        if let Some(index) = self.index_of(id) {
+            self.try_expand_entry(index);
+            self.focus_body = Some(id);
+        }
     }
 }
 
@@ -361,7 +372,7 @@ mod tests {
         assert_eq!(tree.visible_tree_entries.len(), 9);
         assert!(tree.nth_visible_entry(0).unwrap().is_expanded);
         for i in 1..9 {
-            tree.toggle_entry_expansion(i);
+            tree.toggle_visible_entry_expansion(i);
         }
         assert_eq!(tree.visible_tree_entries.len(), 9);
         tree.toggle_selection_expansion();
@@ -396,7 +407,7 @@ mod tests {
             tree_state.build_deepness_prefix(tree_state.index_of_nth_visible_entry(8).unwrap()),
             "└─"
         );
-        tree_state.toggle_entry_expansion(8);
+        tree_state.toggle_visible_entry_expansion(8);
         assert_eq!(
             tree_state.build_deepness_prefix(tree_state.index_of_nth_visible_entry(9).unwrap()),
             "  ├─"

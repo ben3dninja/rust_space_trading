@@ -97,6 +97,11 @@ impl SpaceMap {
             }
         }
     }
+
+    pub fn focus(&mut self, entity: Entity) {
+        self.reset_offset();
+        self.focus_body = Some(entity);
+    }
 }
 
 #[derive(Default)]
