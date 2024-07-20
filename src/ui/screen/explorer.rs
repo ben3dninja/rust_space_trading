@@ -44,7 +44,14 @@ pub fn plugin(app: &mut App) {
             Update,
             (
                 read_input.in_set(InputReading),
-                (handle_explorer_events, focus_on_select_body).in_set(EventHandling),
+                (
+                    handle_explorer_events,
+                    focus_on_select_body.run_if(
+                        resource_exists::<Events<SelectObjectEvent>>
+                            .and_then(on_event::<SelectObjectEvent>()),
+                    ),
+                )
+                    .in_set(EventHandling),
                 update_space_map.in_set(UiUpdate),
             )
                 .run_if(in_loaded_screen::<ExplorerContext>(AppScreen::Explorer)),
