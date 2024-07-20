@@ -4,10 +4,11 @@ use bevy::{
     core_pipeline::CorePipelinePlugin,
     gizmos::GizmoPlugin,
     input::{
-        mouse::{MouseScrollUnit, MouseWheel},
+        common_conditions::input_pressed,
+        mouse::{MouseMotion, MouseScrollUnit, MouseWheel},
         InputPlugin,
     },
-    math::DVec3,
+    math::{DVec2, DVec3},
     prelude::*,
     render::{camera::ScalingMode, pipelined_rendering::PipelinedRenderingPlugin, RenderPlugin},
     sprite::{MaterialMesh2dBundle, Mesh2dHandle, SpritePlugin},
@@ -69,7 +70,14 @@ impl Plugin for GuiPlugin {
                 .run_if(resource_exists::<SpaceMap>)
                 .run_if(in_state(Loaded)),
         )
-        .add_systems(Update, zoom_with_scroll.run_if(resource_exists::<SpaceMap>));
+        .add_systems(
+            Update,
+            (
+                zoom_with_scroll,
+                pan_when_dragging.run_if(input_pressed(MouseButton::Left)),
+            )
+                .run_if(resource_exists::<SpaceMap>),
+        );
     }
 }
 
@@ -134,6 +142,14 @@ fn zoom_with_scroll(mut events: EventReader<MouseWheel>, mut space_map: ResMut<S
             MouseScrollUnit::Line => event.y,
             MouseScrollUnit::Pixel => event.y * SCROLL_SENSITIVITY,
         } as f64);
+    }
+}
+
+fn pan_when_dragging(mut motions: EventReader<MouseMotion>, mut map: ResMut<SpaceMap>) {
+    for event in motions.read() {
+        let scale = map.system_size / (500. * map.zoom_level);
+        // The horizontal inputs seem to be inversed
+        map.offset_amount += scale * event.delta.as_dvec2() * DVec2::new(-1., 1.);
     }
 }
 
