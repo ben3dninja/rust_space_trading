@@ -65,7 +65,7 @@ impl PredictionStart {
     }
 }
 
-fn get_bodies_pos(
+pub fn get_bodies_pos(
     selected_bodies: impl Iterator<Item = Entity>,
     bodies: &Query<(&EllipticalOrbit, &BodyInfo)>,
     mapping: &HashMap<BodyID, Entity>,

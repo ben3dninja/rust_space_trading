@@ -17,11 +17,16 @@ use bevy::{
     window::PrimaryWindow,
     winit::{WakeUp, WinitPlugin},
 };
+use bevy_ratatui::event::KeyEvent;
+use crossterm::event::KeyCode;
 
 use crate::{
     physics::{influence::HillRadius, orbit::SystemSize, predictions::Prediction},
     prelude::*,
-    utils::algebra::project_onto_plane,
+    utils::{
+        algebra::{center_to_periapsis_direction, half_sizes, project_onto_plane},
+        ui::{viewable_radius, EllipseBuilder},
+    },
 };
 
 use super::{
@@ -30,7 +35,7 @@ use super::{
     RenderSet, UiUpdate,
 };
 
-const MAX_WIDTH: f32 = 1000.;
+pub const MAX_WIDTH: f32 = 1000.;
 const MIN_RADIUS: f32 = 1e-4;
 const SCROLL_SENSITIVITY: f32 = 10.;
 pub struct GuiPlugin;
@@ -55,7 +60,7 @@ impl Plugin for GuiPlugin {
         ))
         .insert_resource(ClearColor(Color::Srgba(BLACK)))
         .add_event::<SelectObjectEvent>()
-        .add_systems(Startup, gui_setup)
+        .add_systems(Startup, (camera_setup, color_setup))
         .add_systems(
             OnEnter(Loaded),
             (insert_display_components, update_transform)
@@ -69,6 +74,7 @@ impl Plugin for GuiPlugin {
                     .chain()
                     .in_set(UiUpdate),
                 draw_gizmos.in_set(RenderSet),
+                print_radius,
             )
                 .run_if(resource_exists::<SpaceMap>)
                 .run_if(in_state(Loaded)),
@@ -110,10 +116,13 @@ pub struct Colors {
     other: Handle<ColorMaterial>,
 }
 
-fn gui_setup(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>>) {
+pub fn camera_setup(mut commands: Commands) {
     let mut cam = Camera2dBundle::default();
     cam.projection.scaling_mode = ScalingMode::FixedVertical(MAX_WIDTH);
     commands.spawn(cam);
+}
+
+pub fn color_setup(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>>) {
     let colors = Colors {
         stars: materials.add(Color::Srgba(GOLD)),
         planets: materials.add(Color::Srgba(TEAL)),
@@ -237,12 +246,21 @@ fn update_transform(system_size: Res<SystemSize>, mut query: Query<(&mut Transfo
     }
 }
 
+#[allow(non_snake_case)]
 fn draw_gizmos(
     space_map: Res<SpaceMap>,
     mut gizmos: Gizmos,
-    bodies: Query<(&Transform, &Velocity, &BodyInfo, &HillRadius)>,
+    bodies: Query<(
+        &Transform,
+        &Velocity,
+        &BodyInfo,
+        &HillRadius,
+        &EllipticalOrbit,
+    )>,
     ships: Query<(&Transform, &Velocity, &Influenced), With<ShipInfo>>,
+    mapping: Res<BodiesMapping>,
     predictions: Query<(&Transform, &Prediction)>,
+    cam: Query<(&Camera, &GlobalTransform)>,
 ) {
     let scale = MAX_WIDTH as f64 / space_map.system_size;
     if let &SpaceMap {
@@ -251,20 +269,71 @@ fn draw_gizmos(
         ..
     } = space_map.as_ref()
     {
-        if let Ok((pos, _, info, _)) = bodies.get(s) {
+        let (cam, cam_pos) = cam.single();
+        if let Ok((pos, _, info, _, _)) = bodies.get(s) {
             gizmos.circle_2d(
                 pos.translation.xy(),
                 (10. / zoom_level).max(info.0.radius * scale + 15. / zoom_level) as f32,
                 Color::srgba(1., 1., 1., 0.1),
             );
+            let parent_translation = pos.translation;
+            for &i in info
+                .0
+                .orbiting_bodies
+                .iter()
+                .filter_map(|id| mapping.0.get(id))
+            {
+                let &EllipticalOrbit {
+                    semimajor_axis: a,
+                    inclination: I,
+                    long_asc_node: O,
+                    arg_periapsis: o,
+                    eccentricity: e,
+                    eccentric_anomaly: E,
+                    revolution_period,
+                    ..
+                } = bodies.get(i).unwrap().4;
+                let (o, O, I, E) = (
+                    o.to_radians(),
+                    O.to_radians(),
+                    I.to_radians(),
+                    E.to_radians(),
+                );
+                let (peri, apo) = ((1. - e) * a, (1. + e) * a);
+                if let Some(radius) = viewable_radius(cam) {
+                    let distance_to_parent = (cam_pos.translation() - parent_translation).length();
+                    if distance_to_parent + radius < (peri * scale) as f32
+                        || distance_to_parent - radius > (apo * scale) as f32
+                    {
+                        continue;
+                    }
+                }
+                let position = (scale * (peri - a) * center_to_periapsis_direction(o, O, I))
+                    .as_vec3()
+                    + parent_translation;
+                let resolution = ((zoom_level * 100.) as usize).min(1000);
+                EllipseBuilder {
+                    position,
+                    rotation: Quat::from_rotation_z(O as f32)
+                        * Quat::from_rotation_x(I as f32)
+                        * Quat::from_rotation_z(o as f32),
+                    half_size: (half_sizes(a, e) * scale).as_vec2(),
+                    color: Color::WHITE.with_alpha(0.1),
+                    resolution,
+                    initial_angle: E as f32,
+                    sign: -revolution_period.signum() as f32,
+                }
+                .draw(&mut gizmos);
+            }
         }
-        for (pos, _, _, radius) in bodies.iter() {
+        for (pos, _, _, radius, _) in bodies.iter() {
             gizmos.circle_2d(
                 pos.translation.xy(),
                 (radius.0 * scale) as f32,
                 Color::srgba(1., 0.1, 0.1, 0.1),
             );
         }
+
         for (t, speed, influence) in ships.iter() {
             let ref_speed = influence
                 .main_influencer
@@ -285,6 +354,14 @@ fn draw_gizmos(
                 (1. - p.index as f32 / PREDICTIONS_NUMBER as f32) * 2. / zoom_level as f32,
                 Color::srgba(1., 1., 1., 0.1),
             );
+        }
+    }
+}
+
+fn print_radius(mut keys: EventReader<KeyEvent>, cam: Query<&Camera>) {
+    for event in keys.read() {
+        if event.code == KeyCode::Char('p') {
+            eprintln!("{}", viewable_radius(cam.single()).unwrap());
         }
     }
 }

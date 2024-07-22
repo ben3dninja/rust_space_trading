@@ -63,3 +63,16 @@ pub fn circular_orbit_around_body(
         (G * body_mass / altitude).sqrt() * DVec3::new(vx, vy, 0.) + body_speed,
     )
 }
+
+#[allow(non_snake_case)]
+pub fn center_to_periapsis_direction(o: f64, O: f64, I: f64) -> DVec3 {
+    DVec3::new(
+        O.cos() * o.cos() - O.sin() * I.cos() * o.sin(),
+        O.cos() * o.cos() + O.cos() * I.cos() * o.sin(),
+        I.sin() * o.sin(),
+    )
+}
+
+pub fn half_sizes(a: f64, e: f64) -> DVec2 {
+    DVec2::new(1., (1. - e * e).sqrt()) * a
+}

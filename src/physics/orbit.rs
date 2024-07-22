@@ -32,19 +32,19 @@ pub struct OrbitsUpdate;
 
 #[derive(Component, Default, Clone, Debug)]
 pub struct EllipticalOrbit {
-    eccentricity: f64,
+    pub eccentricity: f64,
     pub semimajor_axis: f64,
-    inclination: f64,
-    long_asc_node: f64,
-    arg_periapsis: f64,
-    initial_mean_anomaly: f64,
-    revolution_period: f64,
+    pub inclination: f64,
+    pub long_asc_node: f64,
+    pub arg_periapsis: f64,
+    pub initial_mean_anomaly: f64,
+    pub revolution_period: f64,
 
-    mean_anomaly: f64,
-    eccentric_anomaly: f64,
+    pub mean_anomaly: f64,
+    pub eccentric_anomaly: f64,
     /// 2D position in the orbital plane around the host body
-    orbital_position: DVec2,
-    orbital_velocity: DVec2,
+    pub orbital_position: DVec2,
+    pub orbital_velocity: DVec2,
     /// 3D position with respect to the host body (in kilometers)
     pub local_pos: DVec3,
     /// 3D velocity (in kilometers per day)
@@ -69,15 +69,15 @@ impl EllipticalOrbit {
         let ed = e.to_degrees();
         let mut E = M + ed * M.to_radians().sin();
         // TODO : change formulas to use radians instead
-        let mut dM = M - (E - ed * E.to_radians().sin());
-        let mut dE = dM / (1. - e * E.to_radians().cos());
+        let mut dM;
+        let mut dE;
         for _ in 0..10 {
-            if dE.abs() <= E_TOLERANCE {
-                break;
-            }
             dM = M - (E - ed * E.to_radians().sin());
             dE = dM / (1. - e * E.to_radians().cos());
             E += dE;
+            if dE.abs() <= E_TOLERANCE {
+                break;
+            }
         }
         self.eccentric_anomaly = E;
     }
