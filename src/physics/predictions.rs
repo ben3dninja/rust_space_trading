@@ -8,13 +8,14 @@ use super::{
 };
 
 /// Number of client updates between two predictions
-const PREDICTIONS_STEP: usize = 20;
+pub const PREDICTIONS_STEP: usize = 20;
 
 /// A component representing identifying a prediction of a ship at a selected time
 #[derive(Component)]
 pub struct Prediction {
     pub ship: Entity,
     pub index: usize,
+    pub simtick: u64,
 }
 
 #[derive(Debug)]
@@ -22,7 +23,7 @@ pub struct PredictionStart {
     pub pos: DVec3,
     pub speed: DVec3,
     pub acc: DVec3,
-    pub time: f64,
+    pub tick: u64,
 }
 
 impl PredictionStart {
@@ -35,7 +36,7 @@ impl PredictionStart {
         bodies: &Query<(&EllipticalOrbit, &BodyInfo)>,
         mapping: &HashMap<BodyID, Entity>,
     ) -> Vec<DVec3> {
-        let dt = GAMETIME_PER_SIMTICK * PREDICTIONS_STEP as f64;
+        let dt = GAMETIME_PER_SIMTICK;
         let mut pos = self.pos;
         let mut speed = self.speed;
         let mut predictions = Vec::new();
@@ -43,18 +44,14 @@ impl PredictionStart {
         let masses = influencers
             .clone()
             .map(|e| bodies.get(e).unwrap().1 .0.mass);
-        let initial_positions = get_bodies_pos(influencers.clone(), bodies, mapping, self.time);
+        let initial_positions = get_bodies_pos(influencers.clone(), bodies, mapping, self.tick);
         let initial_ref_pos = ref_index.map_or(DVec3::ZERO, |i| initial_positions[i]);
         let mut acc = self.acc;
         let mut previous_acc;
         for i in 1..number + 1 {
             pos += get_dx(speed, acc, dt);
-            let positions = get_bodies_pos(
-                influencers.clone(),
-                bodies,
-                mapping,
-                self.time + (i * PREDICTIONS_STEP) as f64 * GAMETIME_PER_SIMTICK,
-            );
+            let positions =
+                get_bodies_pos(influencers.clone(), bodies, mapping, self.tick + i as u64);
             let ref_pos = ref_index.map_or(DVec3::ZERO, |i| positions[i]);
             previous_acc = acc;
             acc = get_acceleration(pos, positions.into_iter().zip(masses.clone()));
@@ -69,23 +66,23 @@ pub fn get_bodies_pos(
     selected_bodies: impl Iterator<Item = Entity>,
     bodies: &Query<(&EllipticalOrbit, &BodyInfo)>,
     mapping: &HashMap<BodyID, Entity>,
-    time: f64,
+    tick: u64,
 ) -> Vec<DVec3> {
     fn compute_pos_rec(
         e: Entity,
         map: &mut HashMap<Entity, DVec3>,
-        time: f64,
+        tick: u64,
         bodies: &Query<(&EllipticalOrbit, &BodyInfo)>,
         mapping: &HashMap<BodyID, Entity>,
     ) -> DVec3 {
         let (orbit, BodyInfo(data)) = bodies.get(e).unwrap();
         let mut o = orbit.clone();
-        o.update_pos(time);
+        o.update_pos(tick as f64 * GAMETIME_PER_SIMTICK);
         if let Some(pos) = map.get(&e) {
             *pos
         } else {
             let pos = data.host_body.map_or(DVec3::ZERO, |parent| {
-                compute_pos_rec(mapping[&parent], map, time, bodies, mapping) + o.local_pos
+                compute_pos_rec(mapping[&parent], map, tick, bodies, mapping) + o.local_pos
             });
             map.insert(e, pos);
             pos
@@ -95,7 +92,7 @@ pub fn get_bodies_pos(
     let mut map = HashMap::new();
 
     selected_bodies
-        .map(|e| compute_pos_rec(e, &mut map, time, bodies, mapping))
+        .map(|e| compute_pos_rec(e, &mut map, tick, bodies, mapping))
         .collect()
 }
 
@@ -134,7 +131,7 @@ mod tests {
         let predictions = PredictionStart {
             pos,
             speed,
-            time: 0.,
+            tick: 0,
             acc: get_acceleration(pos, query.iter_many(&influencers).map(|(p, m)| (p.0, m.0))),
         }
         .compute_predictions(3, influencers.into_iter(), Some(earth), &bodies, &mapping.0);

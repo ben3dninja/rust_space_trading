@@ -17,11 +17,9 @@ use bevy::{
     window::PrimaryWindow,
     winit::{WakeUp, WinitPlugin},
 };
-use bevy_ratatui::event::KeyEvent;
-use crossterm::event::KeyCode;
 
 use crate::{
-    physics::{influence::HillRadius, orbit::SystemSize, predictions::Prediction},
+    physics::{influence::HillRadius, orbit::SystemSize},
     prelude::*,
     utils::{
         algebra::{center_to_periapsis_direction, half_sizes, project_onto_plane},
@@ -30,10 +28,11 @@ use crate::{
 };
 
 use super::{
-    screen::editor::PREDICTIONS_NUMBER,
     widget::space_map::{SpaceMap, ZOOM_STEP},
     RenderSet, UiUpdate,
 };
+
+pub mod editor_gui;
 
 pub const MAX_WIDTH: f32 = 1000.;
 const MIN_RADIUS: f32 = 1e-4;
@@ -42,56 +41,58 @@ pub struct GuiPlugin;
 
 impl Plugin for GuiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            TransformPlugin,
-            InputPlugin,
-            WindowPlugin::default(),
-            AccessibilityPlugin,
-            AssetPlugin::default(),
-            WinitPlugin::<WakeUp>::default(),
-            RenderPlugin::default(),
-            ImagePlugin::default(),
-            PipelinedRenderingPlugin,
-            CorePipelinePlugin,
-            SpritePlugin,
-            TextPlugin,
-            UiPlugin,
-            GizmoPlugin,
-        ))
-        .insert_resource(ClearColor(Color::Srgba(BLACK)))
-        .add_event::<SelectObjectEvent>()
-        .add_systems(Startup, (camera_setup, color_setup))
-        .add_systems(
-            OnEnter(Loaded),
-            (insert_display_components, update_transform)
-                .chain()
-                .in_set(GUIUpdate),
-        )
-        .add_systems(
-            PostUpdate,
-            (
-                (update_transform, update_camera_pos)
+        app
+            // Set of default plugins to build a window
+            .add_plugins((
+                TransformPlugin,
+                InputPlugin,
+                WindowPlugin::default(),
+                AccessibilityPlugin,
+                AssetPlugin::default(),
+                WinitPlugin::<WakeUp>::default(),
+                RenderPlugin::default(),
+                ImagePlugin::default(),
+                PipelinedRenderingPlugin,
+                CorePipelinePlugin,
+                SpritePlugin,
+                TextPlugin,
+                UiPlugin,
+                GizmoPlugin,
+            ))
+            .add_plugins(editor_gui::plugin)
+            .insert_resource(ClearColor(Color::Srgba(BLACK)))
+            .add_event::<SelectObjectEvent>()
+            .add_systems(Startup, (camera_setup, color_setup))
+            .add_systems(
+                OnEnter(Loaded),
+                (insert_display_components, update_transform)
                     .chain()
-                    .in_set(UiUpdate),
-                draw_gizmos.in_set(RenderSet),
-                print_radius,
+                    .in_set(GUIUpdate),
             )
-                .run_if(resource_exists::<SpaceMap>)
-                .run_if(in_state(Loaded)),
-        )
-        .add_systems(
-            Update,
-            (
-                zoom_with_scroll,
-                pan_when_dragging.run_if(input_pressed(MouseButton::Left)),
+            .add_systems(
+                PostUpdate,
+                (
+                    (update_transform, update_camera_pos)
+                        .chain()
+                        .in_set(UiUpdate),
+                    draw_gizmos.in_set(RenderSet),
+                )
+                    .run_if(resource_exists::<SpaceMap>)
+                    .run_if(in_state(Loaded)),
             )
-                .run_if(resource_exists::<SpaceMap>),
-        )
-        .add_systems(
-            PreUpdate,
-            send_select_object_event
-                .run_if(on_event::<MouseButtonInput>().and_then(resource_exists::<SpaceMap>)),
-        );
+            .add_systems(
+                Update,
+                (
+                    zoom_with_scroll,
+                    pan_when_dragging.run_if(input_pressed(MouseButton::Left)),
+                )
+                    .run_if(resource_exists::<SpaceMap>),
+            )
+            .add_systems(
+                PreUpdate,
+                send_select_object_event
+                    .run_if(on_event::<MouseButtonInput>().and_then(resource_exists::<SpaceMap>)),
+            );
     }
 }
 
@@ -104,9 +105,11 @@ pub struct SelectObjectEvent {
 }
 
 #[derive(Component, Copy, Clone, Debug)]
+/// A selectable object. The actual radius is the radius of the object in transform coordinates,
+/// but since it can seem too small when zooming out, we can provide a minimum radius that is independent of zoom level
 pub struct SelectionRadius {
-    min_radius: f32,
-    actual_radius: f32,
+    pub min_radius: f32,
+    pub actual_radius: f32,
 }
 
 #[derive(Resource)]
@@ -259,7 +262,6 @@ fn draw_gizmos(
     )>,
     ships: Query<(&Transform, &Velocity, &Influenced), With<ShipInfo>>,
     mapping: Res<BodiesMapping>,
-    predictions: Query<(&Transform, &Prediction)>,
     cam: Query<(&Camera, &GlobalTransform)>,
 ) {
     let scale = MAX_WIDTH as f64 / space_map.system_size;
@@ -271,11 +273,14 @@ fn draw_gizmos(
     {
         let (cam, cam_pos) = cam.single();
         if let Ok((pos, _, info, _, _)) = bodies.get(s) {
+            // Display selection circle
             gizmos.circle_2d(
                 pos.translation.xy(),
                 (10. / zoom_level).max(info.0.radius * scale + 15. / zoom_level) as f32,
                 Color::srgba(1., 1., 1., 0.1),
             );
+
+            // Display children orbits
             let parent_translation = pos.translation;
             for &i in info
                 .0
@@ -326,6 +331,7 @@ fn draw_gizmos(
                 .draw(&mut gizmos);
             }
         }
+        // Display sphere of influence
         for (pos, _, _, radius, _) in bodies.iter() {
             gizmos.circle_2d(
                 pos.translation.xy(),
@@ -334,6 +340,7 @@ fn draw_gizmos(
             );
         }
 
+        // Display ships
         for (t, speed, influence) in ships.iter() {
             let ref_speed = influence
                 .main_influencer
@@ -348,20 +355,13 @@ fn draw_gizmos(
                 Color::Srgba(GOLD),
             );
         }
-        for (t, p) in predictions.iter() {
-            gizmos.circle_2d(
-                t.translation.xy(),
-                (1. - p.index as f32 / PREDICTIONS_NUMBER as f32) * 2. / zoom_level as f32,
-                Color::srgba(1., 1., 1., 0.1),
-            );
-        }
     }
 }
 
-fn print_radius(mut keys: EventReader<KeyEvent>, cam: Query<&Camera>) {
-    for event in keys.read() {
-        if event.code == KeyCode::Char('p') {
-            eprintln!("{}", viewable_radius(cam.single()).unwrap());
-        }
-    }
-}
+// fn debug_print(mut keys: EventReader<KeyEvent>, cam: Query<&Camera>) {
+//     for event in keys.read() {
+//         if event.code == KeyCode::Char('p') {
+//             eprintln!("{}", viewable_radius(cam.single()).unwrap());
+//         }
+//     }
+// }

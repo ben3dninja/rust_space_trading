@@ -1,9 +1,13 @@
 use std::{
+    collections::{btree_map, BTreeMap},
     fs::{read_dir, remove_file, File},
     io::{Read, Write},
+    iter::Peekable,
     path::Path,
     sync::Arc,
 };
+
+use vectorize;
 
 use bevy::{math::DVec3, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -36,18 +40,18 @@ pub fn plugin(app: &mut App) {
 #[derive(SystemSet, Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct TrajectoryUpdate;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Component, Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ManeuverNode {
     pub name: String,
-    pub time: f64,
     pub thrust: DVec3,
     pub origin: BodyID,
 }
 
 /// A succession of maneuver nodes sorted by order of time, with a single node per time
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Trajectory {
-    nodes: Vec<ManeuverNode>,
+    #[serde(with = "vectorize")]
+    nodes: BTreeMap<u64, ManeuverNode>,
 }
 
 pub enum TrajectoryError {
@@ -56,61 +60,17 @@ pub enum TrajectoryError {
     IndexOutOfBounds,
 }
 
-impl Trajectory {
-    pub fn get_nodes(&self) -> &Vec<ManeuverNode> {
-        &self.nodes
-    }
-
-    pub fn push(&mut self, node: ManeuverNode) -> Result<(), TrajectoryError> {
-        self.insert(self.nodes.len(), node)
-    }
-
-    pub fn insert(&mut self, index: usize, node: ManeuverNode) -> Result<(), TrajectoryError> {
-        if index > self.nodes.len() {
-            return Err(TrajectoryError::IndexOutOfBounds);
-        }
-        if let Some(previous) = index.checked_sub(1).and_then(|i| self.nodes.get(i)) {
-            if previous.time > node.time {
-                return Err(TrajectoryError::NotSorted);
-            }
-            if previous.time == node.time {
-                return Err(TrajectoryError::MultipleNodesPerTime);
-            }
-        }
-        if let Some(next) = self.nodes.get(index) {
-            if next.time < node.time {
-                return Err(TrajectoryError::NotSorted);
-            }
-            if next.time == node.time {
-                return Err(TrajectoryError::MultipleNodesPerTime);
-            }
-        }
-        self.nodes.insert(index, node);
-        Ok(())
-    }
-}
-
 /// A trajectory taken by an object, storing the index of the last processed maneuver node in the action stage the instance was created
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug)]
 pub struct CurrentTrajectory {
-    trajectory: Trajectory,
-    current_node: usize,
+    queue: Peekable<btree_map::IntoIter<u64, ManeuverNode>>,
 }
 
 impl CurrentTrajectory {
     pub fn new(trajectory: Trajectory) -> Self {
         Self {
-            trajectory,
-            current_node: 0,
+            queue: trajectory.nodes.into_iter().peekable(),
         }
-    }
-
-    pub fn current(&self) -> Option<&ManeuverNode> {
-        self.trajectory.nodes.get(self.current_node)
-    }
-
-    pub fn advance(&mut self) {
-        self.current_node += 1;
     }
 }
 
@@ -124,8 +84,12 @@ pub enum TrajectoryEvent {
     AddNode {
         ship: ShipID,
         node: ManeuverNode,
+        simtick: u64,
     },
-    PopNode(ShipID),
+    RemoveNode {
+        ship: ShipID,
+        simtick: u64,
+    },
 }
 
 #[derive(Event, Debug)]
@@ -157,8 +121,8 @@ pub fn follow_trajectory(
 ) {
     let events = Arc::new(Mutex::new(Vec::new()));
     trajectories.par_iter_mut().for_each(|(e, mut t, info)| {
-        if let Some(n) = t.current() {
-            if n.time >= time.time() {
+        if let Some((simtick, n)) = t.queue.peek() {
+            if *simtick >= time.simtick {
                 if let Some(origin) = mapping.0.get(&n.origin) {
                     let (&Position(o_pos), &Velocity(o_speed)) = coords.get(*origin).unwrap();
                     let (&Position(pos), &Velocity(speed)) = coords.get(e).unwrap();
@@ -168,7 +132,7 @@ pub fn follow_trajectory(
                         thrust,
                     });
                 }
-                t.advance();
+                t.queue.next();
             }
         }
     });
@@ -220,7 +184,7 @@ pub fn handle_trajectory_event(
                 Create { ship, .. } => ship,
                 Delete(s) => s,
                 AddNode { ship, .. } => ship,
-                PopNode(s) => s,
+                RemoveNode { ship, .. } => ship,
             }
             .to_string(),
         );
@@ -229,14 +193,14 @@ pub fn handle_trajectory_event(
                 write_trajectory(path, trajectory)?;
             }
             Delete(_) => remove_file(path)?,
-            AddNode { node, .. } => {
+            AddNode { node, simtick, .. } => {
                 let mut t = read_trajectory(&path)?;
-                t.nodes.push(node.clone());
+                t.nodes.insert(*simtick, node.clone());
                 write_trajectory(path, &t)?;
             }
-            PopNode(_) => {
+            RemoveNode { simtick, .. } => {
                 let mut t = read_trajectory(&path)?;
-                t.nodes.pop();
+                t.nodes.remove(simtick);
                 write_trajectory(path, &t)?;
             }
         }
@@ -266,12 +230,14 @@ mod tests {
 
     fn new_trajectory() -> Trajectory {
         Trajectory {
-            nodes: vec![ManeuverNode {
-                name: "1".to_owned(),
-                time: 0.,
-                thrust: DVec3::new(1e4, 0., 0.),
-                origin: id_from("terre"),
-            }],
+            nodes: BTreeMap::from([(
+                0,
+                ManeuverNode {
+                    name: "1".to_owned(),
+                    thrust: DVec3::new(1e4, 0., 0.),
+                    origin: id_from("terre"),
+                },
+            )]),
         }
     }
 
@@ -290,7 +256,10 @@ mod tests {
         let mut buf = String::new();
         File::open(&file_path)?.read_to_string(&mut buf)?;
         let traj = read_trajectory(file_path)?;
-        assert_eq!(traj, trajectory);
+        assert_eq!(
+            traj.nodes.into_iter().collect::<Vec<_>>(),
+            trajectory.nodes.into_iter().collect::<Vec<_>>()
+        );
         Ok(())
     }
 
@@ -314,7 +283,11 @@ mod tests {
             .set(GameStage::Action);
         app.update();
         let world = app.world_mut();
-        let mut query = world.query::<&CurrentTrajectory>();
-        assert_eq!(query.single(world).trajectory, trajectory);
+        let mut query = world.query::<&mut CurrentTrajectory>();
+        let queue = &mut query.single_mut(world).queue;
+        assert_eq!(
+            queue.collect::<Vec<_>>(),
+            trajectory.nodes.into_iter().collect::<Vec<_>>()
+        );
     }
 }

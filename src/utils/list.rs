@@ -46,6 +46,11 @@ pub trait ClampedList {
             Direction2::Down => self.select_next(),
         }
     }
+
+    fn select_last(&mut self) {
+        let len = self.len();
+        self.list_state().select(len.checked_sub(1));
+    }
 }
 pub trait OptionsList<const SIZE: usize> {
     fn current_index(&mut self) -> &mut usize;
