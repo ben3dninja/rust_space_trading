@@ -9,6 +9,8 @@ use crate::{
 };
 use bevy::{color::palettes::css::RED, prelude::*};
 
+use super::MAX_HEIGHT;
+
 pub fn plugin(app: &mut App) {
     app.add_systems(
         PostUpdate,
@@ -29,7 +31,8 @@ fn draw_predictions(
     for (t, p) in predictions.iter() {
         gizmos.circle_2d(
             t.translation.xy(),
-            (1. - p.index as f32 / PREDICTIONS_NUMBER as f32) * 2. / space_map.zoom_level as f32,
+            (1. - p.index as f32 / PREDICTIONS_NUMBER as f32) * MAX_HEIGHT
+                / (500. * space_map.zoom_level as f32),
             Color::srgba(1., 1., 1., 0.1),
         );
     }
@@ -44,7 +47,7 @@ fn draw_maneuver_node(
     if let Some(e) = context.selected_prediction_entity() {
         gizmos.circle_2d(
             positions.get(e).unwrap().translation.xy(),
-            10. / space_map.zoom_level as f32,
+            MAX_HEIGHT / (100. * space_map.zoom_level as f32),
             RED,
         );
     }

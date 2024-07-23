@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bevy::{prelude::*, state::app::StatesPlugin, time::TimePlugin};
+use bevy::{prelude::*, state::app::StatesPlugin};
 use tempfile::{tempdir, TempDir};
 
 use crate::{
@@ -49,14 +49,11 @@ impl Plugin for GamePlugin {
         } else {
             GAME_FILES_PATH.into()
         };
-        app.add_plugins((
-            // required plugins for the app to work. If there is no gui, we still have to add a schedulerunner plugin (see bevy default and minimal plugin sets)
-            TaskPoolPlugin::default(),
-            TypeRegistrationPlugin,
-            FrameCountPlugin,
-            TimePlugin,
-            StatesPlugin,
-        ))
+        if self.testing {
+            app.add_plugins((MinimalPlugins, StatesPlugin))
+        } else {
+            app.add_plugins(DefaultPlugins)
+        }
         .add_plugins((PhysicsPlugin, BodiesPlugin, ShipsPlugin))
         .add_computed_state::<InGame>()
         .add_computed_state::<Authoritative>()

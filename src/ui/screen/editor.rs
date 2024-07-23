@@ -16,7 +16,7 @@ use crate::{
         predictions::{Prediction, PredictionStart},
     },
     ui::{
-        gui::{SelectObjectEvent, SelectionRadius},
+        gui::{SelectObjectEvent, SelectionRadius, MAX_HEIGHT},
         widget::space_map::SpaceMap,
         EventHandling, InputReading,
     },
@@ -199,7 +199,7 @@ fn create_predictions(mut commands: Commands, mut ctx: ResMut<EditorContext>) {
                     Position::default(),
                     TransformBundle::from_transform(Transform::from_xyz(0., 0., -3.)),
                     SelectionRadius {
-                        min_radius: 10.,
+                        min_radius: MAX_HEIGHT / 100.,
                         actual_radius: 0.,
                     },
                     ClearOnEditorExit,

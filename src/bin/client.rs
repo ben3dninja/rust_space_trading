@@ -10,6 +10,7 @@ fn main() {
     let singleplayer_bodies_config = BodiesConfig::SmallestBodyType(BodyType::Comet);
     App::new()
         .add_plugins((
+            rust_space_trading::ui::gui::GuiPlugin,
             ClientPlugin {
                 singleplayer_bodies_config,
                 ..Default::default()
@@ -19,7 +20,6 @@ fn main() {
                 ..Default::default()
             },
             // bevy::app::ScheduleRunnerPlugin::default(),
-            rust_space_trading::ui::gui::GuiPlugin,
         ))
         .run();
 }

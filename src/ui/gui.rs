@@ -1,28 +1,21 @@
 use bevy::{
-    a11y::AccessibilityPlugin,
     color::palettes::css::{BLACK, DARK_GRAY, GOLD, TEAL},
-    core_pipeline::CorePipelinePlugin,
-    gizmos::GizmoPlugin,
     input::{
         common_conditions::input_pressed,
         mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
-        ButtonState, InputPlugin,
+        ButtonState,
     },
     math::{DVec2, DVec3},
     prelude::*,
-    render::{camera::ScalingMode, pipelined_rendering::PipelinedRenderingPlugin, RenderPlugin},
-    sprite::{MaterialMesh2dBundle, Mesh2dHandle, SpritePlugin},
-    text::TextPlugin,
-    ui::UiPlugin,
+    render::camera::ScalingMode,
     window::PrimaryWindow,
-    winit::{WakeUp, WinitPlugin},
 };
 
 use crate::{
     physics::{influence::HillRadius, orbit::SystemSize},
     prelude::*,
     utils::{
-        algebra::{center_to_periapsis_direction, half_sizes, project_onto_plane},
+        algebra::{center_to_periapsis_direction, half_sizes},
         ui::{viewable_radius, EllipseBuilder},
     },
 };
@@ -34,32 +27,14 @@ use super::{
 
 pub mod editor_gui;
 
-pub const MAX_WIDTH: f32 = 1000.;
+pub const MAX_HEIGHT: f32 = 10000.;
 const MIN_RADIUS: f32 = 1e-4;
 const SCROLL_SENSITIVITY: f32 = 10.;
 pub struct GuiPlugin;
 
 impl Plugin for GuiPlugin {
     fn build(&self, app: &mut App) {
-        app
-            // Set of default plugins to build a window
-            .add_plugins((
-                TransformPlugin,
-                InputPlugin,
-                WindowPlugin::default(),
-                AccessibilityPlugin,
-                AssetPlugin::default(),
-                WinitPlugin::<WakeUp>::default(),
-                RenderPlugin::default(),
-                ImagePlugin::default(),
-                PipelinedRenderingPlugin,
-                CorePipelinePlugin,
-                SpritePlugin,
-                TextPlugin,
-                UiPlugin,
-                GizmoPlugin,
-            ))
-            .add_plugins(editor_gui::plugin)
+        app.add_plugins(editor_gui::plugin)
             .insert_resource(ClearColor(Color::Srgba(BLACK)))
             .add_event::<SelectObjectEvent>()
             .add_systems(Startup, (camera_setup, color_setup))
@@ -76,6 +51,7 @@ impl Plugin for GuiPlugin {
                         .chain()
                         .in_set(UiUpdate),
                     draw_gizmos.in_set(RenderSet),
+                    debug_print,
                 )
                     .run_if(resource_exists::<SpaceMap>)
                     .run_if(in_state(Loaded)),
@@ -114,20 +90,30 @@ pub struct SelectionRadius {
 
 #[derive(Resource)]
 pub struct Colors {
-    stars: Handle<ColorMaterial>,
-    planets: Handle<ColorMaterial>,
-    other: Handle<ColorMaterial>,
+    stars: Handle<StandardMaterial>,
+    planets: Handle<StandardMaterial>,
+    other: Handle<StandardMaterial>,
 }
 
 pub fn camera_setup(mut commands: Commands) {
-    let mut cam = Camera2dBundle::default();
-    cam.projection.scaling_mode = ScalingMode::FixedVertical(MAX_WIDTH);
+    let cam = Camera3dBundle {
+        transform: Transform::from_xyz(0., 0., MAX_HEIGHT).looking_at(Vec3::ZERO, Vec3::Y),
+        projection: Projection::Orthographic(OrthographicProjection {
+            far: 2. * MAX_HEIGHT,
+            scaling_mode: ScalingMode::FixedVertical(MAX_HEIGHT),
+            ..default()
+        }),
+        ..default()
+    };
     commands.spawn(cam);
 }
 
-pub fn color_setup(mut commands: Commands, mut materials: ResMut<Assets<ColorMaterial>>) {
+pub fn color_setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
     let colors = Colors {
-        stars: materials.add(Color::Srgba(GOLD)),
+        stars: materials.add(StandardMaterial {
+            base_color: Color::Srgba(GOLD),
+            ..default()
+        }),
         planets: materials.add(Color::Srgba(TEAL)),
         other: materials.add(Color::Srgba(DARK_GRAY)),
     };
@@ -142,34 +128,39 @@ fn insert_display_components(
     colors: Res<Colors>,
     system_size: Res<SystemSize>,
 ) {
-    let scale = MAX_WIDTH as f64 / system_size.0;
+    let scale = MAX_HEIGHT as f64 / system_size.0;
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 1e10,
+            ..default()
+        },
+        ..default()
+    });
     bodies.iter().for_each(|(e, BodyInfo(data))| {
-        let (material, z) = match data.body_type {
-            BodyType::Star => (colors.stars.clone(), 0.),
-            BodyType::Planet => (colors.planets.clone(), -1.),
-            _ => (colors.other.clone(), -2.),
+        let material = match data.body_type {
+            BodyType::Star => colors.stars.clone(),
+            BodyType::Planet => colors.planets.clone(),
+            _ => colors.other.clone(),
         };
         commands.entity(e).insert((
-            MaterialMesh2dBundle {
-                mesh: Mesh2dHandle(meshes.add(Circle {
-                    radius: MIN_RADIUS.max((data.radius * scale) as f32),
-                })),
+            PbrBundle {
+                mesh: meshes.add(
+                    Sphere {
+                        radius: MIN_RADIUS.max((data.radius * scale) as f32),
+                    }
+                    .mesh(),
+                ),
                 material,
-                transform: Transform::from_xyz(0., 0., z),
                 ..default()
             },
             SelectionRadius {
-                min_radius: 10.,
+                min_radius: MAX_HEIGHT / 100.,
                 actual_radius: (data.radius * scale) as f32,
             },
         ));
     });
     for e in ships.iter() {
-        commands
-            .entity(e)
-            .insert(TransformBundle::from_transform(Transform::from_xyz(
-                0., 0., 1.,
-            )));
+        commands.entity(e).insert(TransformBundle::default());
     }
 }
 
@@ -185,7 +176,6 @@ fn zoom_with_scroll(mut events: EventReader<MouseWheel>, mut space_map: ResMut<S
 fn pan_when_dragging(mut motions: EventReader<MouseMotion>, mut map: ResMut<SpaceMap>) {
     for event in motions.read() {
         let scale = map.system_size / (500. * map.zoom_level);
-        // The horizontal inputs seem to be inversed
         map.offset_amount += scale * event.delta.as_dvec2() * DVec2::new(-1., 1.);
     }
 }
@@ -223,10 +213,10 @@ fn send_select_object_event(
 
 fn update_camera_pos(
     space_map: Res<SpaceMap>,
-    mut cam: Query<(&mut Transform, &mut OrthographicProjection)>,
+    mut cam: Query<(&mut Transform, &mut Projection)>,
     positions: Query<&Position>,
 ) {
-    let scale = MAX_WIDTH as f64 / space_map.system_size;
+    let scale = MAX_HEIGHT as f64 / space_map.system_size;
     let (mut cam_pos, mut proj) = cam.single_mut();
     let focus_pos = space_map
         .focus_body
@@ -234,18 +224,17 @@ fn update_camera_pos(
     cam_pos.translation = ((focus_pos
         + DVec3::new(space_map.offset_amount.x, space_map.offset_amount.y, 0.))
         * scale)
-        .as_vec3();
-    proj.scale = (1. / space_map.zoom_level) as f32;
+        .as_vec3()
+        + MAX_HEIGHT * Vec3::Z;
+    if let Projection::Orthographic(ortho) = proj.as_mut() {
+        ortho.scale = (1. / space_map.zoom_level) as f32;
+    }
 }
 
 fn update_transform(system_size: Res<SystemSize>, mut query: Query<(&mut Transform, &Position)>) {
-    let scale = MAX_WIDTH as f64 / system_size.0;
+    let scale = MAX_HEIGHT as f64 / system_size.0;
     for (mut transform, Position(pos)) in query.iter_mut() {
-        let (x, y) = (project_onto_plane(*pos, (DVec3::X, DVec3::Y)) * scale)
-            .as_vec2()
-            .into();
-        transform.translation.x = x;
-        transform.translation.y = y;
+        transform.translation = (*pos * scale).as_vec3();
     }
 }
 
@@ -262,21 +251,21 @@ fn draw_gizmos(
     )>,
     ships: Query<(&Transform, &Velocity, &Influenced), With<ShipInfo>>,
     mapping: Res<BodiesMapping>,
-    cam: Query<(&Camera, &GlobalTransform)>,
 ) {
-    let scale = MAX_WIDTH as f64 / space_map.system_size;
+    let scale = MAX_HEIGHT as f64 / space_map.system_size;
     if let &SpaceMap {
         zoom_level,
         selected: Some(s),
         ..
     } = space_map.as_ref()
     {
-        let (cam, cam_pos) = cam.single();
         if let Ok((pos, _, info, _, _)) = bodies.get(s) {
             // Display selection circle
             gizmos.circle_2d(
                 pos.translation.xy(),
-                (10. / zoom_level).max(info.0.radius * scale + 15. / zoom_level) as f32,
+                (MAX_HEIGHT as f64 / (100. * zoom_level))
+                    .max(info.0.radius * scale + MAX_HEIGHT as f64 / (70. * zoom_level))
+                    as f32,
                 Color::srgba(1., 1., 1., 0.1),
             );
 
@@ -304,18 +293,19 @@ fn draw_gizmos(
                     I.to_radians(),
                     E.to_radians(),
                 );
-                let (peri, apo) = ((1. - e) * a, (1. + e) * a);
-                if let Some(radius) = viewable_radius(cam) {
-                    let distance_to_parent = (cam_pos.translation() - parent_translation).length();
-                    if distance_to_parent + radius < (peri * scale) as f32
-                        || distance_to_parent - radius > (apo * scale) as f32
-                    {
-                        continue;
-                    }
-                }
-                let position = (scale * (peri - a) * center_to_periapsis_direction(o, O, I))
-                    .as_vec3()
-                    + parent_translation;
+                let peri = (1. - e) * a;
+                // if let Some(radius) = viewable_radius(cam) {
+                //     let distance_to_parent = (cam_pos.translation() - parent_translation).length();
+                //     if distance_to_parent + radius < (peri * scale) as f32
+                //         || distance_to_parent - radius > (apo * scale) as f32
+                //     {
+                //         continue;
+                //     }
+                // }
+                let position =
+                    (scale * (peri - a) * center_to_periapsis_direction(o, O, I).normalize())
+                        .as_vec3()
+                        + parent_translation;
                 let resolution = ((zoom_level * 100.) as usize).min(1000);
                 EllipseBuilder {
                     position,
@@ -345,7 +335,8 @@ fn draw_gizmos(
             let ref_speed = influence
                 .main_influencer
                 .map_or(DVec3::ZERO, |e| bodies.get(e).unwrap().1 .0);
-            let speed = ((speed.0 - ref_speed).normalize_or(DVec3::X) * 30. / zoom_level)
+            let speed = ((speed.0 - ref_speed).normalize_or(DVec3::X) * MAX_HEIGHT as f64
+                / (30. * zoom_level))
                 .xy()
                 .as_vec2();
             let t = t.translation.xy() - speed / 3.;
@@ -358,10 +349,10 @@ fn draw_gizmos(
     }
 }
 
-// fn debug_print(mut keys: EventReader<KeyEvent>, cam: Query<&Camera>) {
-//     for event in keys.read() {
-//         if event.code == KeyCode::Char('p') {
-//             eprintln!("{}", viewable_radius(cam.single()).unwrap());
-//         }
-//     }
-// }
+fn debug_print(mut keys: EventReader<bevy_ratatui::event::KeyEvent>, cam: Query<&Camera>) {
+    for event in keys.read() {
+        if event.code == crossterm::event::KeyCode::Char('p') {
+            eprintln!("{}", viewable_radius(cam.single()).unwrap());
+        }
+    }
+}
