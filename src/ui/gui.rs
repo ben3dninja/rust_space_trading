@@ -1,5 +1,6 @@
 use bevy::{
     color::palettes::css::{BLACK, DARK_GRAY, GOLD, TEAL},
+    core_pipeline::bloom::BloomSettings,
     input::{
         common_conditions::input_pressed,
         mouse::{MouseButtonInput, MouseMotion, MouseScrollUnit, MouseWheel},
@@ -27,7 +28,7 @@ use super::{
 
 pub mod editor_gui;
 
-pub const MAX_HEIGHT: f32 = 10000.;
+pub const MAX_HEIGHT: f32 = 100000.;
 const MIN_RADIUS: f32 = 1e-4;
 const SCROLL_SENSITIVITY: f32 = 10.;
 pub struct GuiPlugin;
@@ -96,22 +97,29 @@ pub struct Colors {
 }
 
 pub fn camera_setup(mut commands: Commands) {
-    let cam = Camera3dBundle {
-        transform: Transform::from_xyz(0., 0., MAX_HEIGHT).looking_at(Vec3::ZERO, Vec3::Y),
-        projection: Projection::Orthographic(OrthographicProjection {
-            far: 2. * MAX_HEIGHT,
-            scaling_mode: ScalingMode::FixedVertical(MAX_HEIGHT),
+    commands.spawn((
+        Camera3dBundle {
+            camera: Camera {
+                hdr: true,
+                ..default()
+            },
+            transform: Transform::from_xyz(0., 0., MAX_HEIGHT).looking_at(Vec3::ZERO, Vec3::Y),
+            projection: Projection::Orthographic(OrthographicProjection {
+                far: 2. * MAX_HEIGHT,
+                scaling_mode: ScalingMode::FixedVertical(MAX_HEIGHT),
+                ..default()
+            }),
             ..default()
-        }),
-        ..default()
-    };
-    commands.spawn(cam);
+        },
+        BloomSettings::NATURAL,
+    ));
 }
 
 pub fn color_setup(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
     let colors = Colors {
         stars: materials.add(StandardMaterial {
             base_color: Color::Srgba(GOLD),
+            emissive: LinearRgba::from(GOLD) * 50.,
             ..default()
         }),
         planets: materials.add(Color::Srgba(TEAL)),
@@ -129,13 +137,6 @@ fn insert_display_components(
     system_size: Res<SystemSize>,
 ) {
     let scale = MAX_HEIGHT as f64 / system_size.0;
-    commands.spawn(PointLightBundle {
-        point_light: PointLight {
-            intensity: 1e10,
-            ..default()
-        },
-        ..default()
-    });
     bodies.iter().for_each(|(e, BodyInfo(data))| {
         let material = match data.body_type {
             BodyType::Star => colors.stars.clone(),
@@ -158,6 +159,21 @@ fn insert_display_components(
                 actual_radius: (data.radius * scale) as f32,
             },
         ));
+        if matches!(data.body_type, BodyType::Star) {
+            commands.entity(e).with_children(|builder| {
+                builder.spawn(PointLightBundle {
+                    point_light: PointLight {
+                        intensity: (data.radius * scale * 1e3).powi(3) as f32,
+                        color: Color::WHITE,
+                        shadows_enabled: true,
+                        radius: (data.radius * scale) as f32,
+                        range: MAX_HEIGHT,
+                        ..default()
+                    },
+                    ..default()
+                });
+            });
+        }
     });
     for e in ships.iter() {
         commands.entity(e).insert(TransformBundle::default());
